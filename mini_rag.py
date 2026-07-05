@@ -17,7 +17,7 @@ Prasyarat sebelum menjalankan:
      ollama serve   (biasanya otomatis jalan di background setelah install)
 
 2. Install dependency Python:
-     pip install langchain langchain-community langchain-ollama langchain-groq chromadb python-dotenv
+     pip install langchain langchain-text-splitters langchain-ollama langchain-chroma langchain-groq chromadb python-dotenv
 
 3. Simpan API key Groq (gratis, dari https://console.groq.com) di file .env
    di folder yang sama dengan script ini:
@@ -29,10 +29,10 @@ Cara jalankan:
 
 import os
 from dotenv import load_dotenv
-from langchain_community.document_loaders import TextLoader
+from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_ollama import OllamaEmbeddings
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -43,9 +43,13 @@ load_dotenv()  # baca file .env di folder yang sama dan set sebagai env var
 
 def build_rag_pipeline(file_path: str):
     # 1. LOAD - baca dokumen
+    # Catatan: file .txt sederhana dibaca langsung pakai Python biasa lalu
+    # dibungkus jadi Document, supaya tidak perlu depend ke TextLoader dari
+    # langchain-community (package tersebut sudah di-sunset/archived).
     print("[1/5] Loading dokumen...")
-    loader = TextLoader(file_path, encoding="utf-8")
-    documents = loader.load()
+    with open(file_path, encoding="utf-8") as f:
+        text = f.read()
+    documents = [Document(page_content=text, metadata={"source": file_path})]
 
     # 2. SPLIT - potong jadi chunk kecil
     # chunk_size kecil karena dokumen contoh ini pendek.
@@ -113,16 +117,29 @@ def main():
 
     print("=== Mini-RAG Q&A siap. Ketik 'exit' untuk keluar. ===\n")
     while True:
-        question = input("Pertanyaan: ").strip()
+        try:
+            question = input("Pertanyaan: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\nAgent stopped.")
+            break
+
         if question.lower() in ("exit", "quit", "keluar"):
             break
         if not question:
             continue
 
-        answer = rag_chain.invoke(question)
+        try:
+            answer = rag_chain.invoke(question)
+        except KeyboardInterrupt:
+            print("\nAgent stopped.")
+            break
+
         print(f"\nJawaban: {answer}\n")
         print("-" * 60)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nAgent stopped.")
