@@ -37,8 +37,50 @@ from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
+from langchain_core.runnables import RunnableLambda
 
 load_dotenv()  # baca file .env di folder yang sama dan set sebagai env var
+
+SPECIFIC_LEAVE_KEYWORDS = {
+    "sakit",
+    "melahirkan",
+    "lahiran",
+    "menikah",
+    "nikah",
+    "haji",
+    "kematian",
+    "bencana",
+    "mendesak",
+    "pendamping",
+}
+
+
+def prepare_question(question: str) -> dict:
+    normalized = question.lower()
+
+    is_generic_leave = (
+        "cuti" in normalized
+        and not any(
+            keyword in normalized
+            for keyword in SPECIFIC_LEAVE_KEYWORDS
+        )
+    )
+
+    if is_generic_leave:
+        interpreted_question = (
+            f"{question}. Anggap permintaan cuti tanpa jenis khusus "
+            "sebagai cuti tahunan."
+        )
+        search_query = f"kebijakan cuti tahunan {question}"
+    else:
+        interpreted_question = question
+        search_query = question
+
+    return {
+        "question": question,
+        "interpreted_question": interpreted_question,
+        "search_query": search_query,
+    }
 
 
 def build_rag_pipeline(file_path: str):
@@ -72,30 +114,51 @@ def build_rag_pipeline(file_path: str):
 
     # retriever = komponen yang nyari chunk paling relevan
     # k=2 artinya ambil 2 chunk paling mirip dengan pertanyaan
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 2})
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
 
     # 5. GENERATE - siapkan LLM (Groq, gratis tier, cepat karena LPU)
     print("[5/5] Menyiapkan LLM (Groq Llama 3.3 70B)...")
     llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
 
     prompt = ChatPromptTemplate.from_template(
-        """Jawab pertanyaan HANYA berdasarkan context di bawah ini.
-Jika jawaban tidak ada di context, katakan "Informasi tidak ditemukan di dokumen."
+    """Jawab berdasarkan context dan aturan interpretasi berikut.
+
+Aturan:
+- Permintaan "cuti" tanpa menyebut sakit, menikah, melahirkan, haji, kematian, atau kondisi khusus dianggap sebagai cuti tahunan.
+- Durasi seperti 1 hari atau 2 hari adalah jumlah cuti yang ingin diambil, bukan jenis cutinya.
+- Jangan mengatakan informasi tidak ditemukan apabila jenis cutinya dapat ditentukan menggunakan aturan di atas.
+- Jangan menganggap permintaan sudah disetujui.
+- Sebutkan persyaratan pengajuan yang tersedia di context.
 
 Context:
 {context}
 
-Pertanyaan: {question}
+Pertanyaan:
+{question}
+
+Pertanyaan terinterpretasi:
+{interpreted_question}
 
 Jawaban:"""
-    )
+)
 
     def format_docs(docs):
         return "\n\n".join(doc.page_content for doc in docs)
 
     # Rangkai semua jadi satu chain menggunakan LCEL (LangChain Expression Language)
     rag_chain = (
-        {"context": retriever | format_docs, "question": RunnablePassthrough()}
+        RunnableLambda(prepare_question)
+        | {
+            "context": (
+                RunnableLambda(lambda data: data["search_query"])
+                | retriever
+                | RunnableLambda(format_docs)
+            ),
+            "question": RunnableLambda(lambda data: data["question"]),
+            "interpreted_question": RunnableLambda(
+                lambda data: data["interpreted_question"]
+            ),
+        }
         | prompt
         | llm
         | StrOutputParser()
