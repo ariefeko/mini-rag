@@ -36,10 +36,11 @@ from langchain_chroma import Chroma
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
 from langchain_core.runnables import RunnableLambda
+from rag_debug import debug_chunks_and_vectors, debug_similarity_search
 
 load_dotenv()  # baca file .env di folder yang sama dan set sebagai env var
+
 
 SPECIFIC_LEAVE_KEYWORDS = {
     "sakit",
@@ -108,6 +109,8 @@ def build_rag_pipeline(file_path: str):
     print("[3/5] Menyiapkan embedding model (nomic-embed-text via Ollama)...")
     embeddings = OllamaEmbeddings(model="nomic-embed-text")
 
+    debug_chunks_and_vectors(chunks, embeddings)
+
     # 4. STORE - simpan ke vector store in-memory (Chroma)
     print("[4/5] Membuat vector store (Chroma, in-memory)...")
     vectorstore = Chroma.from_documents(documents=chunks, embedding=embeddings)
@@ -165,7 +168,7 @@ Jawaban:"""
     )
 
     print("Pipeline siap!\n")
-    return rag_chain
+    return rag_chain, vectorstore
 
 
 def main():
@@ -176,7 +179,7 @@ def main():
         return
 
     file_path = os.path.join(os.path.dirname(__file__), "kebijakan_cuti.txt")
-    rag_chain = build_rag_pipeline(file_path)
+    rag_chain, vectorstore = build_rag_pipeline(file_path)
 
     print("=== Mini-RAG Q&A siap. Ketik 'exit' untuk keluar. ===\n")
     while True:
@@ -192,6 +195,7 @@ def main():
             continue
 
         try:
+            debug_similarity_search(vectorstore, question, prepare_question, k=4)
             answer = rag_chain.invoke(question)
         except KeyboardInterrupt:
             print("\nAgent stopped.")
